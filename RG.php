@@ -1,221 +1,241 @@
 #!/usr/bin/php
 <?php
+
 function bitRotation($value, $amount, $version)
 {
+    //kadangi php kalboje 32 bitu right-shiftas mums prideda 
+    //nereikalingu bitu del skirtingu integer didziu 32 ir 64 bit sistemose, 
+    //tad mums reikes patiems apsibrezti max integeri
     if ($version == 64) {
-        $mask = 0x7fffffffffffffff;
+        $systemIntLimit = 9223372036854775807;
     } else {
-        $mask = 0x7fffffff;
+        $systemIntLimit = 2147483647;
     }
+    if ($amount != 0) {
     $rot =
-        (($value >> $amount) & ($mask >> $amount - 1)) |
+        (($value >> $amount) & ($systemIntLimit >> $amount - 1)) |
         ($value << $version - $amount);
+    }else{
+        $rot = $value;
+    }
     return $rot;
 }
 
-$belt = [
-    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-];
-$mill = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-
+//The mill function
+//priima versija ($version)
 function millFunction($version)
 {
     global $mill;
-    $CPMill = []; # Copy of mill
     $rotate = 0;
-    $temporary = [];
-
+    $millHold = [];
     //γ: non-linearity
-    for ($i = 0; $i < 19; $i++) {
-        $temporary[$i] =
-            $mill[$i % 19] ^ ($mill[($i + 1) % 19] | ~$mill[($i + 2) % 19]); //mes paneigiame sekanti elementa (pvz: 0010 -> 1101)
+    $i = 0;
+    while($i < 19) {
+        $millHold[$i] =
+            $mill[$i % 19] ^ ($mill[($i + 1) % 19] | ~$mill[($i + 2) % 19]); // ~ simbolis paneigia sekanti elementa (pvz: 0010 -> 1101)
+        $i++;
     }
-
-    //π: intra-word and inter-word dispersion(bitwise rotation)
-    for ($i = 0; $i < 19; $i++) {
-        $bitamount = ($i * 7) % 19;
-        $rotate = ($rotate + $i) % $version; //our word size (lw)
-
-        if ($rotate == 0) {
-            $CPMill[$i] = $temporary[$bitamount];
-        } else {
-            $CPMill[$i] = bitRotation(
-                $temporary[$bitamount],
-                $rotate,
-                $version
-            );
-        }
+    //π: intra-word and inter-word dispersion
+    $mill2 = []; //Mill rotuotou reiksmiu saugojimui
+    $i = 0;
+    while($i < 19) {
+        $mill2[$i] = bitRotation(
+            $millHold[($i * 7) % 19],
+            (($i*($i+1))/2 % $version),//rotavimo kiekis
+            $version
+        );
+        $i++;
     }
-
     // θ: diffusion
-    for ($i = 0; $i < 19; $i++) {
+    $i = 0;
+    while($i < 19) {
         $mill[$i] =
-            $CPMill[$i % 19] ^ $CPMill[($i + 1) % 19] ^ $CPMill[($i + 4) % 19];
+            $mill2[$i % 19] ^ $mill2[($i + 1) % 19] ^ $mill2[($i + 4) % 19];
+        $i++;
     }
-
     //ι: asymmetry
-    $mill[0] ^= 1;
+    $mill[0] = $mill[0] ^ 1;
 }
+
 //The round function
-function beltFunction($version)
+//priima versija ($version)
+function roundFunction($version)
 {
     global $belt;
     global $mill;
-    $belt2 = [];
-
-    # Belt function: simple rotation
-    for ($row = 0; $row < 3; $row++) {
-        $belt2[$row] = $belt[$row][13 - 1];
-        //printf("----\n");
-        //printf($belt2[$row]);
-        //printf("----\n");
-        for ($collumn = 13 - 1; $collumn > 0; $collumn--) {
-            $belt[$row][$collumn] = $belt[$row][$collumn - 1];
-        }
-        $belt[$row][$collumn] = $belt2[$row];
+    $belt2 = $belt;
+    // Belt function: simple rotation
+    $row=0;
+    while($row < 3) {
+        array_unshift($belt[$row], array_pop($belt[$row]));//rotuoti masyva į dešinę
+        $row++;
     }
-
-    # Mill to belt feedforward
-    for ($i = 0; $i < 13 - 1; $i++) {
+    // Mill to belt feedforward
+    $i = 0;
+    while($i <= 11) {
         //printf($i % $3);
         //printf("\n");
         $belt[$i % 3][($i + 1) % 13] =
             $belt[$i % 3][($i + 1) % 13] ^ $mill[($i + 1) % 19];
+        $i++;
     }
-
-    # Mill function
+    // Mill function
     millFunction($version);
-
-    # Belt to mill feedforward
-    for ($i = 0; $i < 3; $i++) {
-        $mill[13 + $i] = $mill[13 + $i] ^ $belt2[$i];
+    // Belt to mill feedforward
+    $i = 0;
+    while($i <= 2) {
+        $mill[13 + $i] = $mill[13 + $i] ^ $belt2[$i][12];
+        $i++;
     }
 }
 
-function bittifyStringByQuantity($quantity, $string)
+//paimamas kiekis ($quantity) bloko dydziui apskaiciuoti ir stringbit reiksme ($string), grazina input bloka.
+function getInputBlock($quantity, $string)
 {
-    $shiftedValue = 0;
-    for ($q = 0; $q < $quantity; $q++) {
-        //printf($q);
-        //printf(" cycle \n");
-        if (strlen($string) < 1) {
-            $letterToDecimal = 1;
-        } else {
-            $letterToDecimal = ord(substr($string, 0, 1)); //paima pirma raide konvertuojama i ASCII koda
-        }
-        $shiftedValue = $shiftedValue | ($letterToDecimal << 8 * $q); //the | operator (or) adds 1 to bits eg: 0101 | 0010 = 0111, << operator shifts by one bit
-        //printf($shiftedValue);
-        //printf("\n");
-        if (strlen($string) < 1) {
-            break;
-        }
-        $string = substr($string, 1); //reduce string from beginning
+    //input blokam mes paimame 'žodžius' kuriu dydis priklauso nuo versijos ir nuskaitome po 8 bitus nuo desines puses
+    //analogiskai 'žodi' galime suskirstyti i masyva po 8 bitus, sukeisdami elementus atvirksciai.
+    //tai galime isivaizduoti konvertuojant 8 bitus i ascii simbolius pzv.: "abcd"->"dcba"
+    $strArr=implode("",array_reverse(array_slice(str_split($string,8),0,$quantity/8)));//sustatome $quantity kiekio elementus po 8 bitu porose ir sudeliojam išvirkščia tvarka.
+    if(strlen($strArr)!=$quantity){
+        $strArr="00000001" . $strArr;//sioje vietoje tiesiog pridedame 00000001 kaip apvalkala (appending)
     }
-    //printf("\n");
-    //printf($string);
-    return $shiftedValue;
+    print "\n";
+    print_r($strArr);print "\n";
+    $inputBlockVaue=bindec($strArr);
+    return $inputBlockVaue;
 }
 
-function InitialMapping($string, $version)
+//Injection
+//priima nuskaityta is failo reiksme ($string) ir versija ($version)
+function Injection($string, $version)
 {
     global $belt;
     global $mill;
-    if ($version == 64) {
-        $quantity = 8;
-    } else {
-        $quantity = 4;
-    }
-    $end = false;
-    while (!$end) {
-        //užsibaigti ciklui slyga tada kai visi simboliai apdoroti
-        for ($i = 0; $i < 3; $i++) {
-            //3 kartai, nes belt turi tris eiles
-            $shiftedValue = bittifyStringByQuantity($quantity, $string);
-            $string = substr($string, $quantity);
-            $belt[$i][0] = $belt[$i][0] ^ $shiftedValue;
-            $mill[$i + 16] = $mill[$i + 16] ^ $shiftedValue;
-            if (strlen($string) < 1) {
-                //if we pass an empty string
-                //printf('should be the last process of the string ');
-                $a = 0;
-                while ($a < 17) {
-                    beltFunction($version);
-                    $a++;
-                }
-                $end = true;
-                break;
+    $a=$belt;//masyvai su 0 reiksmemis
+    $b=$mill;//masyvas su 0 reiksmemis
+    while (strlen($string) >= 1) {//užsibaigti ciklui salyga tada kai lieka maziau negu 8 bitai
+        $i = 0;
+        $inputBlocks=[];
+        //input blokai (po 3 zodzius)
+        while(($i < 3)&&(strlen($string) >= 1)) {
+            array_push($inputBlocks,getInputBlock($version, $string));
+            $string = substr($string, $version);
+            $i++;
+        }
+        $mapped=inputMapping($a,$b,$inputBlocks);
+        $a=$mapped[0];
+        $b=$mapped[1];
+        $n = 0;
+        while(($n <= 2) && !is_null($inputBlocks[$n])) {
+            for($nn=0;$nn<13;$nn++){
+                $belt[$n][$nn] = $belt[$n][$nn] ^ $a[$n][$nn];
             }
-            //print_r($this->belt);
-            //print_r($this->mill);
+            $mill[$n + 16] = $mill[$n + 16 ] ^ $b[$n + 16];
+            $n++;
         }
-        //print_r('full 3 loop');
-        if (!$end) {
-            beltFunction($version);
-        }
+        roundFunction($version);
     }
 }
+//The input mapping
+function inputMapping($a,$b,$inputBlocks){
+    $i = 0;
+    while(($i <= 2) && !is_null($inputBlocks[$i])) {
+        $a[$i][0] = $inputBlocks[$i];
+        $b[$i + 16] = $inputBlocks[$i];
+        $i++;
+    }
+    return array($a,$b);
+}
 
-function rg($string, $version = 32)
+//The output mapping // grazina 2 mill reiksmes
+function outputMapping(){
+    global $mill;
+    $z=[];
+    $z[0] = $mill[1];
+    $z[1] = $mill[2];
+    return $z;
+}
+//radioGatun priima reiksmes kurios yra skirstomos po 8 bitus.
+//priima nuskaityta faila ($string) ir versija is version.txt.
+//representuoja alternating-input construction algoritma
+function radioGatun($string, $version = 32)
 {
     //printf($version);
     global $mill;
-    InitialMapping($string, $version);
-    $p = 0;
-    if ($version == 64) {
-        $amountPrint = 4;
-    } else {
-        $amountPrint = 8;
+    global $argv;
+    $result=[];
+    //Injection
+    Injection($string, $version);
+    //Mangling
+    //procesuojame 16 (blank rounds);
+    $a = 0;
+    while ($a < 16) {
+        roundFunction($version);
+        $a++;
     }
-    for ($i = 0; $i < $amountPrint; $i++) {
-        //printf($p % 2);
-        //print "\n";
-        if ($p % 2 == 0) {
-            beltFunction($version); // as antras elementas bus procesuojamas
-        }
-        //printf($p % 2);
-        //print "\n";
-        $millElement = $mill[($p % 2) + 1];
-        //printf($millElement);
-        //print "\n";
 
-        //sukeičiame vietomis bitus po 8 poras iš airės į dešinę
-        if ($version == 64) {
-            $millElement =
-                (($millElement & 0xff) << 56) |
-                (($millElement & 0xff00) << 40) |
-                (($millElement & 0xff0000) << 24) |
-                (($millElement & 0xff000000) << 8) |
-                (($millElement & 0xff00000000) >> 8) |
-                (($millElement & 0xff0000000000) >> 24) |
-                (($millElement & 0xff000000000000) >> 40) |
-                (($millElement >> 56) & 0xff);
-        } else {
-            $millElement =
-                (($millElement & 0xff) << 24) |
-                (($millElement & 0xff00) << 8) |
-                (($millElement & 0xff0000) >> 8) |
-                (($millElement >> 24) & 0xff);
-        }
-        //printf($millElement);
-        //print "\n";
-        printf('%08x', $millElement);
-        //print "\n";
-        $p++;
+    if ($version == 64) {
+        $amountPrint = 2;
+    } else {
+        $amountPrint = 4;
     }
+    //Extraction
+    for ($i = 0; $i < $amountPrint; $i++) {
+
+        roundFunction($version);
+
+        //The output mapping
+        $millElements = outputMapping();
+
+        foreach($millElements as $millElement){
+            //paimam bitus po 8 poras iš dešinės į kairę atlikinejant bitu poslinkius
+            print "\n";
+            $stringBits=(string)decbin($millElement);
+            printf($stringBits);
+            printf("-------------");
+            print "\n";
+                while(strlen($stringBits)!=64){
+                    $stringBits = "0" . $stringBits;//konvertuojant i string gali nuimti pirmaujancius nulius, noredami palaikyti reikiama atkarpa pridedame "0"-us
+                }
+                $x=0;
+                $pivot=strlen($stringBits)-$version;
+                if($pivot<0){$pivot=0;}
+                for ($bit = 0; $bit < $version/8; $bit++) {
+                        $x = $x | (bindec(substr($stringBits, $pivot, 8)) << 8 * $bit);
+                    printf(decbin($x));
+                    printf("--");
+                    $stringBits = substr($stringBits, 0, $pivot) . substr($stringBits, $pivot+8);
+                }
+            printf('> ');
+            printf(dechex($x));
+            array_push($result,str_pad(dechex($x),8,'0',STR_PAD_LEFT));
+        }
+    }
+    ($file3 = fopen($argv[2], "w")) or die("Unable to open output file!");
+    fwrite($file3, implode("",$result));
 }
 
-($file1 = fopen('value.txt', 'r')) or die('Unable to open value file!');
+//inicializuojame tuscia belt ir mill
+$belt = [
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+];
+$mill = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+//atidaromi failai
+($file1 = fopen($argv[1], 'r')) or die('Unable to open value file!');
 ($file2 = fopen('version.txt', 'r')) or die('Unable to open version file!');
-$first = fread($file1, filesize('value.txt'));
+$first = fread($file1, filesize($argv[1]));
 $second = fread($file2, filesize('version.txt'));
+//uztikrinamos versijos
 if ($second == 64) {
     $second = 64;
 } else {
     $second = 32;
 }
-rg($first, $second);
 
-
+print "\n";
+radioGatun($first, $second);
+print "\n";
 ?>
